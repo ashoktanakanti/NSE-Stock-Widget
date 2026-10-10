@@ -9,7 +9,7 @@ from flask import Flask, jsonify, render_template_string, request, send_from_dir
 
 from stock_extractor import (
     init_db, seed_historical_prices, fetch_all_quotes, store_quotes,
-    TICKERS, DB_PATH, quote_diag, COMPANY_NAMES, SECTORS, FETCH_INTERVAL_SECONDS,
+    TICKERS, DB_PATH, quote_diag, FUNDAMENTALS, COMPANY_NAMES, SECTORS, FETCH_INTERVAL_SECONDS,
     is_nse_ticker, purge_non_nse_stocks, distinct_price_count, symbol_of,
 )
 from predictor import predict_ticker, FORECAST_STEPS
@@ -130,6 +130,13 @@ def _build_universe():
         row["sector"] = SECTORS.get(sym, "Other")
         row["market_cap"] = row["market_cap"] or e.get("market_cap_fallback")
         row["pe_ratio"] = row["pe_ratio"] or e.get("pe_fallback")
+        # Live v7 fundamentals are often rate-limited on cloud hosts: derive
+        # from bundled shares outstanding / trailing EPS instead
+        shares, eps = FUNDAMENTALS.get(sym, (None, None))
+        if not row["market_cap"] and shares and row["price"]:
+            row["market_cap"] = row["price"] * shares
+        if not row["pe_ratio"] and eps and eps > 0 and row["price"]:
+            row["pe_ratio"] = row["price"] / eps
         if e.get("simulated_bars"):
             row["source"] = "simulated"
         for k in ("spark", "range3m_low", "range3m_high", "ret_1m", "ret_3m"):
