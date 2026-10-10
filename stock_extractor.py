@@ -117,6 +117,24 @@ def load_universe(path: str = UNIVERSE_CSV) -> dict[str, tuple[str, str]]:
 
 
 COMPANIES = load_universe()
+
+
+def load_fundamentals(path: str = os.path.join(BASE_DIR, "data", "fundamentals.csv")):
+    """symbol -> (shares_outstanding, eps_ttm) from update_fundamentals.py."""
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return {r["symbol"]: (num(r["shares_outstanding"]), num(r["eps_ttm"]))
+                    for r in csv.DictReader(fh)}
+    except OSError:
+        return {}
+
+
+FUNDAMENTALS = load_fundamentals()
 COMPANY_NAMES = {s: v[0] for s, v in COMPANIES.items()}
 SECTORS = {s: v[1] for s, v in COMPANIES.items()}
 

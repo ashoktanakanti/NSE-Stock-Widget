@@ -5,6 +5,7 @@ A dense, terminal-style dashboard for the **Nifty 500** (499 tradable NSE stocks
 - **Backend:** Python, Flask, SQLite, scikit-learn. Data from Yahoo Finance (delayed).
 - **Frontend:** React 18, Vite 5, Tailwind CSS 3 (`nse-terminal/`).
 - **Stock list:** `data/nifty500.csv`, the official constituent file from niftyindices.com. Replace it with a newer download to update the universe.
+- **Fundamentals:** `data/fundamentals.csv` (shares outstanding, trailing EPS) gives market cap and P/E when Yahoo rate-limits the host (common on Render). Refresh quarterly with `python update_fundamentals.py` from a home connection.
 
 ## Host it for free (Render)
 
