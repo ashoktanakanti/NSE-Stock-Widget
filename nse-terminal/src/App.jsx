@@ -11,12 +11,14 @@ export default function App(){
   const [query,setQuery]=useState(''),[sort,setSort]=useLocal('nse.sort',{key:'market_cap',dir:-1}),[tab,setTab]=useState('home'),[selected,setSelected]=useState(null),[sector,setSector]=useState(null)
   const [watch,setWatch]=useLocal('nse.watch',[]),search=useRef(null),lastRun=useRef(undefined)
   // Vite's proxy answers 500 when Flask is down, so 5xx reads as unreachable
-  const load=useCallback(()=>api('/api/universe').then(d=>{setQuotes(d);setError(null)}).catch(e=>setError(!e.status||e.status>=500?'Cannot reach the API on :5001':`API returned ${e.status}`)).finally(()=>setLoading(false)),[])
+  const load=useCallback(()=>api('/api/universe').then(d=>{setQuotes(d);setError(null)}).catch(e=>setError(!e.status||e.status>=500?'Cannot reach the API':`API returned ${e.status}`)).finally(()=>setLoading(false)),[])
   const poll=useCallback(()=>api('/api/status').then(s=>{setStatus(s)
     // Reload the universe whenever a pipeline run (manual, auto or startup) completes
     const f=s.refresh?.finished_at;if(lastRun.current!==undefined&&f!==lastRun.current){load();setPending(false)}lastRun.current=f}).catch(()=>{}),[load])
   const refreshing=pending||!!status?.refresh?.running
   useEffect(()=>{load();poll();const a=setInterval(load,60e3);return()=>clearInterval(a)},[load,poll])
+  // Retry quickly after a failed load (cold starts on free hosting, server restarts)
+  useEffect(()=>{if(!error)return;const t=setInterval(load,5e3);return()=>clearInterval(t)},[error,load])
   useEffect(()=>{const b=setInterval(poll,refreshing||status?.seeding?2e3:15e3);return()=>clearInterval(b)},[poll,refreshing,status?.seeding])
   const refresh=async()=>{if(refreshing)return;setPending(true);try{await api('/api/refresh',{method:'POST'});poll()}catch(e){if(e.status!==409)setPending(false)}}
   const toggle=useCallback(t=>setWatch(w=>w.includes(t)?w.filter(x=>x!==t):[...w,t]),[setWatch])
@@ -80,8 +82,8 @@ function Empty({error,retry,seeding}){
     <p className="text-xs text-slate-500">Fetching 6 months of daily prices for the Nifty 500. This takes about 20 seconds on first start; the page fills in automatically.</p>
     <div className="mt-4 space-y-px">{Array.from({length:6},(_,i)=><div key={i} className="skel h-9" style={{opacity:1-i*.15}}/>)}</div></div>)
   return(<div className="mx-auto max-w-md p-10 text-sm text-slate-400">
-  {error?<><div className="mb-2 flex items-center gap-2 font-semibold text-slate-200"><Warn className="text-amber-300"/>{error}</div>
-    <p className="mb-3 text-xs text-slate-500">Start the backend from the project folder:</p></>
+  {error?<><div className="mb-2 flex items-center gap-2 font-semibold text-slate-200"><Warn className="h-4 w-4 shrink-0 text-amber-300"/>{error}</div>
+    <p className="mb-3 text-xs text-slate-500">Retrying every 5 seconds. If the server was asleep it can take up to a minute to wake. Running locally? Start the backend from the project folder:</p></>
    :<><div className="mb-2 font-semibold text-slate-200">No market data yet</div><p className="mb-3 text-xs text-slate-500">The database is empty. Seed ~6 months of history, then start the API:</p></>}
   <pre className="mb-4 overflow-x-auto rounded-lg border bg-card p-3 font-mono text-[11px] leading-relaxed text-slate-300">python stock_extractor.py{'\n'}python app.py</pre>
   <button onClick={retry} className="rounded-lg border border-up/30 bg-up/10 px-3 py-1.5 font-mono text-xs text-up transition hover:bg-up/20 active:scale-95">Retry</button></div>)}

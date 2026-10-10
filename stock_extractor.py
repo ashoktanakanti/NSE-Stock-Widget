@@ -183,8 +183,10 @@ is_indian_ticker = is_nse_ticker
 
 
 def init_db(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     cursor = conn.cursor()
+    # WAL: API reads keep working while the seeder bulk-inserts
+    cursor.execute("PRAGMA journal_mode=WAL")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stocks (
@@ -279,6 +281,8 @@ def _yahoo_chart(ticker: str, interval: str, range_period: str) -> dict | None:
 
 
 _crumb_session: dict = {}
+# Last v7 batch outcome, surfaced via /api/status (helps debug hosted deploys)
+quote_diag: dict = {"ok": None, "error": None, "at": None}
 
 
 def _yahoo_session(refresh: bool = False):
@@ -295,7 +299,7 @@ def _yahoo_session(refresh: bool = False):
     with opener.open(req, timeout=10) as resp:
         crumb = resp.read().decode().strip()
     if not crumb or "<" in crumb:
-        raise RuntimeError("no crumb")
+        raise RuntimeError(f"no crumb (got {crumb[:40]!r})")
     _crumb_session.update(opener=opener, crumb=crumb)
     return opener, crumb
 
@@ -321,9 +325,11 @@ def _fetch_quotes_chunk(tickers: list[str]) -> dict[str, dict]:
             break
         except Exception as exc:
             log.warning("Yahoo batch quote failed (attempt %d): %s", attempt + 1, exc)
+            quote_diag.update(ok=False, error=f"{type(exc).__name__}: {exc}"[:200], at=utc_now())
             data = None
     if not data:
         return out
+    quote_diag.update(ok=True, error=None, at=utc_now())
 
     now = utc_now()
     for q in data.get("quoteResponse", {}).get("result", []):

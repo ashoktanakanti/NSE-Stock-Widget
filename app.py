@@ -9,7 +9,7 @@ from flask import Flask, jsonify, render_template_string, request, send_from_dir
 
 from stock_extractor import (
     init_db, seed_historical_prices, fetch_all_quotes, store_quotes,
-    TICKERS, DB_PATH, COMPANY_NAMES, SECTORS, FETCH_INTERVAL_SECONDS,
+    TICKERS, DB_PATH, quote_diag, COMPANY_NAMES, SECTORS, FETCH_INTERVAL_SECONDS,
     is_nse_ticker, purge_non_nse_stocks, distinct_price_count, symbol_of,
 )
 from predictor import predict_ticker, FORECAST_STEPS
@@ -30,7 +30,7 @@ _universe_cache = {"key": None, "data": None}
 
 
 def get_conn():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB_PATH, timeout=30)
 
 
 def query(sql, params=()):
@@ -209,6 +209,7 @@ def api_status():
         "auto_refresh_seconds": FETCH_INTERVAL_SECONDS,
         "tickers_tracked": len(TICKERS),
         "seeding": _boot_state["seeding"],
+        "quote_batch": quote_diag,
         "tickers_with_data": int(len(latest)),
         "tickers_simulated": int(sim["n"].iloc[0]),
         "last_quote_at": quotes["fetched_at"].max() if len(quotes) else None,
