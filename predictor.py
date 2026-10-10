@@ -129,7 +129,7 @@ def predict_ticker(ticker: str, db_path: str = DB_PATH,
     if not is_nse_ticker(ticker):
         return {"ticker": ticker, "error": "Only NSE tickers (.NS suffix) are supported."}
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     df = pd.read_sql_query(
         "SELECT price, open_price, high_price, low_price, volume, "
         "       change_pct, fetched_at "
