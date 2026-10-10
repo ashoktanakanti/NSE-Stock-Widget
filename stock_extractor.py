@@ -1,5 +1,9 @@
+import csv
+import os
+import re
 import sqlite3
 import socket
+import urllib.error
 import urllib.request
 import urllib.parse
 import http.cookiejar
@@ -13,8 +17,9 @@ import numpy as np
 import pandas as pd
 
 
+# Fallback universe (Nifty 50 core) if data/nifty500.csv is missing.
 # symbol -> (company name, sector)
-COMPANIES = {
+CORE_COMPANIES = {
     "RELIANCE":   ("Reliance Industries",        "Energy"),
     "TCS":        ("Tata Consultancy Services",  "IT"),
     "INFY":       ("Infosys",                    "IT"),
@@ -59,6 +64,59 @@ COMPANIES = {
     "TMPV":       ("Tata Motors Passenger Veh.", "Auto"),
     "TMCV":       ("Tata Motors Commercial Veh.", "Auto"),
 }
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UNIVERSE_CSV = os.path.join(BASE_DIR, "data", "nifty500.csv")
+
+# Short labels for niftyindices.com "Industry" values (keeps sector chips compact)
+SECTOR_SHORT = {
+    "Financial Services": "Financials",
+    "Capital Goods": "Capital Goods",
+    "Healthcare": "Healthcare",
+    "Automobile and Auto Components": "Auto",
+    "Fast Moving Consumer Goods": "FMCG",
+    "Chemicals": "Chemicals",
+    "Information Technology": "IT",
+    "Consumer Services": "Consumer Svcs",
+    "Metals & Mining": "Metals",
+    "Power": "Power",
+    "Oil Gas & Consumable Fuels": "Energy",
+    "Consumer Durables": "Durables",
+    "Services": "Services",
+    "Realty": "Realty",
+    "Construction": "Construction",
+    "Construction Materials": "Materials",
+    "Telecommunication": "Telecom",
+    "Textiles": "Textiles",
+    "Media Entertainment & Publication": "Media",
+    "Diversified": "Diversified",
+}
+
+
+def _clean_name(name: str) -> str:
+    return re.sub(r"\s+(Ltd\.?|Limited)$", "", name.strip())
+
+
+def load_universe(path: str = UNIVERSE_CSV) -> dict[str, tuple[str, str]]:
+    """Nifty 500 constituents from the niftyindices.com CSV
+    (columns: Company Name, Industry, Symbol, Series, ISIN Code)."""
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            rows = list(csv.DictReader(fh))
+    except OSError:
+        return dict(CORE_COMPANIES)
+    out = {}
+    for r in rows:
+        sym = (r.get("Symbol") or "").strip()
+        # The index file carries placeholder rows like DUMMYHEG
+        if not sym or sym.startswith("DUMMY"):
+            continue
+        industry = (r.get("Industry") or "").strip()
+        out[sym] = (_clean_name(r.get("Company Name") or sym),
+                    SECTOR_SHORT.get(industry, industry or "Other"))
+    return out or dict(CORE_COMPANIES)
+
+
+COMPANIES = load_universe()
 COMPANY_NAMES = {s: v[0] for s, v in COMPANIES.items()}
 SECTORS = {s: v[1] for s, v in COMPANIES.items()}
 
@@ -67,11 +125,12 @@ NSE_TICKERS = [s + ".NS" for s in COMPANIES]
 TICKERS = NSE_TICKERS
 NSE_SUFFIX = ".NS"
 
-DB_PATH = "stock_market.db"
+DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "stock_market.db"))
 FETCH_INTERVAL_SECONDS = 60
 HISTORY_RANGE = "6mo"
 MIN_HISTORY_ROWS = 20
 FETCH_WORKERS = 8
+QUOTE_BATCH = 100   # symbols per v7 quote request
 LOG_FORMAT = "%(asctime)s  %(levelname)-8s %(message)s"
 
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -196,6 +255,9 @@ def _get_json(url: str, opener=None, timeout: int = 15) -> dict:
         return json.loads(resp.read().decode())
 
 
+NOT_LISTED = {}  # sentinel: Yahoo answered 404 for the symbol
+
+
 def _yahoo_chart(ticker: str, interval: str, range_period: str) -> dict | None:
     # Symbols like M&M must be percent-encoded (M%26M.NS)
     url = (
@@ -204,6 +266,13 @@ def _yahoo_chart(ticker: str, interval: str, range_period: str) -> dict | None:
     )
     try:
         return _get_json(url)["chart"]["result"][0]
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            # Symbol unknown to Yahoo (new listing / renamed): skip, don't simulate
+            log.warning("Yahoo has no symbol %s", ticker)
+            return NOT_LISTED
+        log.warning("Yahoo chart failed for %s: %s", ticker, exc)
+        return None
     except Exception as exc:
         log.warning("Yahoo chart failed for %s: %s", ticker, exc)
         return None
@@ -232,7 +301,15 @@ def _yahoo_session(refresh: bool = False):
 
 
 def fetch_quotes_batch(tickers: list[str]) -> dict[str, dict]:
-    """One v7 call for every ticker: price, OHLC, prev close, market cap, P/E, 52w."""
+    """v7 quotes in chunks of QUOTE_BATCH: price, OHLC, prev close, market cap, P/E, 52w."""
+    out: dict[str, dict] = {}
+    chunks = [tickers[i:i + QUOTE_BATCH] for i in range(0, len(tickers), QUOTE_BATCH)]
+    for chunk in chunks:
+        out.update(_fetch_quotes_chunk(chunk))
+    return out
+
+
+def _fetch_quotes_chunk(tickers: list[str]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for attempt in range(2):
         try:
@@ -283,7 +360,7 @@ def fetch_quote(ticker: str) -> dict | None:
         return None
 
     result = _yahoo_chart(ticker, "1d", "5d")
-    if not result:
+    if not result:  # also NOT_LISTED
         return None
 
     meta = result["meta"]
@@ -321,6 +398,8 @@ def fetch_price_history(ticker: str,
         return []
 
     result = _yahoo_chart(ticker, "1d", range_period)
+    if result is NOT_LISTED:
+        return []
     if not result:
         return _simulated_history(ticker)
 
