@@ -1,10 +1,11 @@
+import os
 import sqlite3
 import threading
 import time
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template_string, request, send_from_directory
 
 from stock_extractor import (
     init_db, seed_historical_prices, fetch_all_quotes, store_quotes,
@@ -14,15 +15,18 @@ from stock_extractor import (
 from predictor import predict_ticker, FORECAST_STEPS
 
 NSE_TICKER_FILTER = "ticker LIKE '%.NS'"
-PORT = 5001
+PORT = int(os.environ.get("PORT", 5001))
+DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nse-terminal", "dist")
 IST = timezone(timedelta(hours=5, minutes=30))
 SPARK_POINTS = 30
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=None)
 _db_lock = threading.Lock()
 _refresh_lock = threading.Lock()
 _refresh_state = {"running": False, "started_at": None, "finished_at": None,
                   "ok": None, "err": None, "trigger": None}
+_boot_state = {"seeding": False, "started": False}
+_universe_cache = {"key": None, "data": None}
 
 
 def get_conn():
@@ -80,9 +84,19 @@ def api_quotes():
 
 @app.route("/api/universe")
 def api_universe():
+    # ~500 tickers x ~125 bars: recompute only when new rows land
+    key = query("SELECT MAX(id) AS m, COUNT(*) AS n FROM stocks").iloc[0].tolist()
+    if _universe_cache["key"] == key:
+        return jsonify(_universe_cache["data"])
+    data = _build_universe()
+    _universe_cache.update(key=key, data=data)
+    return jsonify(data)
+
+
+def _build_universe():
     latest = query(LATEST_SQL + " ORDER BY ticker")
     if latest.empty:
-        return jsonify([])
+        return []
 
     hist = daily_bars(query(
         f"SELECT id, ticker, price, market_cap, pe_ratio, source, fetched_at "
@@ -121,7 +135,7 @@ def api_universe():
         for k in ("spark", "range3m_low", "range3m_high", "ret_1m", "ret_3m"):
             row[k] = e.get(k)
         out.append(row)
-    return jsonify(out)
+    return out
 
 
 @app.route("/api/history/<path:ticker>")
@@ -194,6 +208,7 @@ def api_status():
         "refresh": _refresh_state,
         "auto_refresh_seconds": FETCH_INTERVAL_SECONDS,
         "tickers_tracked": len(TICKERS),
+        "seeding": _boot_state["seeding"],
         "tickers_with_data": int(len(latest)),
         "tickers_simulated": int(sim["n"].iloc[0]),
         "last_quote_at": quotes["fetched_at"].max() if len(quotes) else None,
@@ -599,33 +614,69 @@ setInterval(loadQuotes, 90000);
 """
 
 
-@app.route("/")
+@app.route("/legacy")
 def dashboard():
     return render_template_string(DASHBOARD_HTML)
 
 
+# Built React app (nse-terminal/dist). Unknown non-API paths fall back to
+# index.html so client-side state survives a reload.
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def frontend(path):
+    if path.startswith("api/"):
+        return jsonify({"error": "not found"}), 404
+    if not os.path.isdir(DIST_DIR):
+        return render_template_string(DASHBOARD_HTML)
+    full = os.path.join(DIST_DIR, path)
+    if path and os.path.isfile(full):
+        return send_from_directory(DIST_DIR, path)
+    return send_from_directory(DIST_DIR, "index.html")
+
+
 def _seed_db():
     """Load ~6 months of daily NSE price history so charts and forecasts work."""
-    conn = get_conn()
-    needs_history = any(distinct_price_count(conn, t) < 15 for t in TICKERS)
-    if needs_history:
-        print("  Loading NSE price history (one-time)…")
-        seed_historical_prices(conn, force=False)
-        print("  History loaded.")
+    _boot_state["seeding"] = True
+    try:
+        conn = get_conn()
+        needs_history = [t for t in TICKERS if distinct_price_count(conn, t) < 15]
+        if needs_history:
+            print(f"  Loading price history for {len(needs_history)} ticker(s)…")
+            # No _db_lock here: the fetch is ~30s of network I/O and SQLite's
+            # own locking covers the short insert; /api/status stays responsive.
+            seed_historical_prices(conn, needs_history, force=False)
+            print("  History loaded.")
+        conn.close()
+    finally:
+        _boot_state["seeding"] = False
+
+
+def bootstrap():
+    """Init DB, then seed + start the quote loop in the background so the
+    HTTP server is up immediately (hosts health-check the port on boot)."""
+    if _boot_state["started"]:
+        return
+    _boot_state["started"] = True
+    conn = init_db(DB_PATH)
+    purge_non_nse_stocks(conn)
     conn.close()
+
+    def _boot():
+        _seed_db()
+        _run_refresh("startup")
+        _auto_refresh_loop()
+
+    threading.Thread(target=_boot, daemon=True).start()
+    print(f"  Tracking {len(TICKERS)} NSE tickers")
+
+
+# gunicorn imports this module; `python app.py` runs it directly.
+if os.environ.get("NSE_AUTOBOOT", "1") == "1":
+    bootstrap()
 
 
 if __name__ == "__main__":
-    print("\n  NSE Terminal API")
-    print("  ----------------")
-    _conn = init_db(DB_PATH)
-    purge_non_nse_stocks(_conn)
-    _conn.close()
-    _seed_db()
-    threading.Thread(target=_run_refresh, args=("startup",), daemon=True).start()
-    threading.Thread(target=_auto_refresh_loop, daemon=True).start()
-    print(f"  Tracking {len(TICKERS)} NSE tickers")
-    print(f"  API     -> http://localhost:{PORT}/api/universe")
-    print(f"  Legacy  -> http://localhost:{PORT}/\n")
+    print(f"  NSE Terminal  ->  http://localhost:{PORT}/")
+    print(f"  API           ->  http://localhost:{PORT}/api/universe")
     # Reloader would spawn a second process and double the background threads
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=PORT, debug=False, threaded=True)

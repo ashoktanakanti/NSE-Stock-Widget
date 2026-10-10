@@ -6,19 +6,33 @@ const COLS=[['symbol','Symbol','all'],['spark','30D','xl'],['price','Price','all
 const SORTABLE=new Set(['symbol','price','change_pct','ret_1m','volume','market_cap'])
 const GRID='grid-cols-[28px_minmax(0,1fr)_auto] md:grid-cols-[28px_minmax(0,1.6fr)_1fr_.8fr_.9fr_1fr] xl:grid-cols-[28px_minmax(0,1.5fr)_84px_1fr_.75fr_.75fr_.8fr_1fr_104px]'
 const vis={all:'',md:'hidden md:block',xl:'hidden xl:block'}
+// One-tap sort presets ('move' = absolute 1D % change, either direction)
+const PRESETS=[['Mkt cap','market_cap',-1],['Biggest movers','move',-1],['Top gainers','change_pct',-1],['Top losers','change_pct',1],
+  ['Price: high → low','price',-1],['Price: low → high','price',1],['Volume','volume',-1],['1M %','ret_1m',-1],['A–Z','symbol',1]]
+const PAGE=100
 
 export default function StockTable({rows,loading,sort,setSort,selected,onSelect,watch,toggle,empty}){
   const head=k=>SORTABLE.has(k)&&setSort(s=>s.key===k?{key:k,dir:-s.dir}:{key:k,dir:k==='symbol'?1:-1})
   const arrow=k=>sort.key===k&&<span className="text-up">{sort.dir>0?' ▲':' ▼'}</span>
+  // Render in pages of 100 (Nifty 500 = ~500 rows); keep the selection in range
+  const [limit,setLimit]=useState(PAGE),sentinel=useRef(null)
+  useEffect(()=>setLimit(PAGE),[sort.key,sort.dir,rows.length])
+  useEffect(()=>{const el=sentinel.current;if(!el)return
+    const io=new IntersectionObserver(([e])=>e.isIntersecting&&setLimit(l=>l+PAGE),{rootMargin:'600px'});io.observe(el);return()=>io.disconnect()})
+  const selIdx=rows.findIndex(r=>r.ticker===selected),shown=Math.max(limit,selIdx+20)
   if(loading)return <div className="space-y-px p-3">{Array.from({length:14},(_,i)=><div key={i} className="skel h-11" style={{opacity:1-i*.06}}/>)}</div>
-  return(<div>
+  return(<div className="flex flex-col">
     <div className={`sticky top-0 z-10 hidden ${GRID} gap-2 border-b bg-bg/95 px-4 py-2 text-[10px] uppercase tracking-wider text-slate-500 backdrop-blur md:grid`}>
       <span/>{COLS.map(([k,l,v],i)=><button key={k} onClick={()=>head(k)} disabled={!SORTABLE.has(k)}
         className={`${vis[v]} ${i?'text-right':'text-left'} ${SORTABLE.has(k)?'hover:text-slate-200':'cursor-default'}`}>{l}{arrow(k)}</button>)}</div>
-    <div className="no-bar flex gap-2 overflow-x-auto border-b px-4 py-2 md:hidden">
-      {COLS.filter(([k])=>SORTABLE.has(k)).map(([k,l])=><button key={k} onClick={()=>head(k)} className={`shrink-0 rounded-full border px-3 py-1 text-xs transition active:scale-95 ${sort.key===k?'border-up/50 text-up':'text-slate-400'}`}>{l}{sort.key===k&&(sort.dir>0?' ▲':' ▼')}</button>)}</div>
+    <div className="no-bar flex items-center gap-1.5 overflow-x-auto border-b px-4 py-2 md:order-first">
+      <span className="mr-1 shrink-0 text-[10px] uppercase tracking-wider text-slate-500">Sort</span>
+      {PRESETS.map(([l,k,d])=>{const on=sort.key===k&&sort.dir===d;return <button key={l} onClick={()=>setSort({key:k,dir:d})} aria-pressed={on}
+        className={`shrink-0 rounded-full border px-2.5 py-0.5 text-[11px] transition active:scale-95 ${on?'border-up/50 bg-up/10 text-up':'text-slate-400 hover:border-white/20 hover:text-slate-200'}`}>{l}</button>})}
+      <span className="num ml-auto shrink-0 pl-3 text-[10px] text-slate-600">{rows.length} stocks</span></div>
     {rows.length===0&&(empty||<div className="p-10 text-center text-sm text-slate-500">No stocks match.</div>)}
-    {rows.map(r=><Row key={r.ticker} r={r} on={watch.includes(r.ticker)} active={selected===r.ticker} onSelect={onSelect} toggle={toggle}/>)}
+    {rows.slice(0,shown).map(r=><Row key={r.ticker} r={r} on={watch.includes(r.ticker)} active={selected===r.ticker} onSelect={onSelect} toggle={toggle}/>)}
+    {shown<rows.length&&<button ref={sentinel} onClick={()=>setLimit(l=>l+PAGE)} className="w-full p-4 text-center text-[11px] text-slate-500 transition hover:text-slate-200">Show more · {rows.length-shown} left</button>}
   </div>)}
 
 const Row=memo(function Row({r,on,active,onSelect,toggle}){

@@ -3,6 +3,8 @@ import Header from './components/Header';import StockTable from './components/St
 import ForecastPanel from './components/ForecastPanel';import MobileNav from './components/MobileNav';import Breadth from './components/Breadth'
 import Profile from './components/Profile';import {Warn} from './components/Icons';import {api,useLocal,parseTs,ago} from './lib'
 const STALE_MS=10*60e3
+// 'move' sorts by size of today's move regardless of direction
+const val=(r,k)=>k==='move'?(r.change_pct==null?null:Math.abs(r.change_pct)):r[k]
 
 export default function App(){
   const [quotes,setQuotes]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(null),[status,setStatus]=useState(null),[pending,setPending]=useState(false)
@@ -15,7 +17,7 @@ export default function App(){
     const f=s.refresh?.finished_at;if(lastRun.current!==undefined&&f!==lastRun.current){load();setPending(false)}lastRun.current=f}).catch(()=>{}),[load])
   const refreshing=pending||!!status?.refresh?.running
   useEffect(()=>{load();poll();const a=setInterval(load,60e3);return()=>clearInterval(a)},[load,poll])
-  useEffect(()=>{const b=setInterval(poll,refreshing?1500:15e3);return()=>clearInterval(b)},[poll,refreshing])
+  useEffect(()=>{const b=setInterval(poll,refreshing||status?.seeding?2e3:15e3);return()=>clearInterval(b)},[poll,refreshing,status?.seeding])
   const refresh=async()=>{if(refreshing)return;setPending(true);try{await api('/api/refresh',{method:'POST'});poll()}catch(e){if(e.status!==409)setPending(false)}}
   const toggle=useCallback(t=>setWatch(w=>w.includes(t)?w.filter(x=>x!==t):[...w,t]),[setWatch])
 
@@ -26,7 +28,7 @@ export default function App(){
     // Exact symbol hits float to the top while searching
     const exact=s=>q&&s.symbol.toLowerCase()===q?0:1
     return [...r].sort((a,b)=>exact(a)-exact(b)||(key==='symbol'?dir*a.symbol.localeCompare(b.symbol)
-      :a[key]==null?1:b[key]==null?-1:dir*(a[key]-b[key])))},[quotes,query,sort,tab,watch,sector])
+      :val(a,key)==null?1:val(b,key)==null?-1:dir*(val(a,key)-val(b,key))))},[quotes,query,sort,tab,watch,sector])
   const sel=quotes.find(q=>q.ticker===selected)
 
   const keys=useRef();keys.current={rows,selected,tab,query}
@@ -60,7 +62,7 @@ export default function App(){
       <button key={k} onClick={()=>setTab(k)} className={`border-b-2 px-3 py-2 text-xs transition ${tab===k?'border-up text-up':'border-transparent text-slate-500 hover:text-slate-200'}`}>{l}</button>)}</div>
     <main className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_400px] 2xl:grid-cols-[minmax(0,1fr)_460px]">
       <section className="min-h-0 overflow-y-auto pb-20 lg:border-r lg:pb-0">
-        {blank?<Empty error={error} retry={load}/>
+        {blank?<Empty error={error} retry={load} seeding={status?.seeding}/>
          :tab==='profile'?<Profile status={status} quotes={quotes} watch={watch} setWatch={setWatch}/>
          :tab==='analytics'?<><div className="lg:hidden">{sel?panel:<><div className="border-b px-4 py-3 text-xs text-slate-500">Pick a stock to see its chart and forecast.</div><StockTable {...tp}/></>}</div>
            <div className="hidden lg:block"><StockTable {...tp}/></div></>
@@ -71,7 +73,13 @@ export default function App(){
         <div className="min-h-0 flex-1 overflow-hidden rounded-t-2xl border-t lg:h-full lg:rounded-none lg:border-0">{panel}</div></aside>
     </main><MobileNav tab={tab} setTab={setTab} count={watch.length}/></div>)}
 
-function Empty({error,retry}){return(<div className="mx-auto max-w-md p-10 text-sm text-slate-400">
+function Empty({error,retry,seeding}){
+  // Fresh deploys start with an empty DB and seed in the background (~20s)
+  if(seeding&&!error)return(<div className="mx-auto max-w-md p-10 text-sm text-slate-400">
+    <div className="mb-2 flex items-center gap-2 font-semibold text-slate-200"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-up"/>Loading market data</div>
+    <p className="text-xs text-slate-500">Fetching 6 months of daily prices for the Nifty 500. This takes about 20 seconds on first start; the page fills in automatically.</p>
+    <div className="mt-4 space-y-px">{Array.from({length:6},(_,i)=><div key={i} className="skel h-9" style={{opacity:1-i*.15}}/>)}</div></div>)
+  return(<div className="mx-auto max-w-md p-10 text-sm text-slate-400">
   {error?<><div className="mb-2 flex items-center gap-2 font-semibold text-slate-200"><Warn className="text-amber-300"/>{error}</div>
     <p className="mb-3 text-xs text-slate-500">Start the backend from the project folder:</p></>
    :<><div className="mb-2 font-semibold text-slate-200">No market data yet</div><p className="mb-3 text-xs text-slate-500">The database is empty. Seed ~6 months of history, then start the API:</p></>}
