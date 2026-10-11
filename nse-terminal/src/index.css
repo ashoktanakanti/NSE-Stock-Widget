@@ -1,7 +1,26 @@
-@tailwind base;@tailwind components;@tailwind utilities;
-body{@apply bg-bg text-slate-200 font-sans antialiased}
-.num{@apply font-mono tabular-nums}
-.skel{@apply animate-pulse rounded bg-white/5}
-::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:6px}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+body {
+  @apply bg-bg text-slate-200 font-sans antialiased;
+}
+.num {
+  @apply font-mono tabular-nums;
+}
+.skel {
+  @apply animate-pulse rounded bg-white/5;
+}
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+}
 /* Horizontal chip rows scroll by touch/trackpad; hide the bar */
-.no-bar{scrollbar-width:none}.no-bar::-webkit-scrollbar{display:none}
+.no-bar {
+  scrollbar-width: none;
+}
+.no-bar::-webkit-scrollbar {
+  display: none;
+}
