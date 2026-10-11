@@ -189,15 +189,8 @@ def is_nse_ticker(ticker: str) -> bool:
     return ticker.upper().endswith(NSE_SUFFIX)
 
 
-def get_exchange(ticker: str) -> str:
-    return "NSE" if is_nse_ticker(ticker) else "OTHER"
-
-
 def symbol_of(ticker: str) -> str:
     return ticker[: -len(NSE_SUFFIX)] if is_nse_ticker(ticker) else ticker
-
-
-is_indian_ticker = is_nse_ticker
 
 
 def init_db(db_path: str) -> sqlite3.Connection:
@@ -593,13 +586,6 @@ def insert_quotes(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     return len(records)
 
 
-def history_row_count(conn: sqlite3.Connection, ticker: str) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) FROM stocks WHERE ticker = ?", (ticker,)
-    ).fetchone()
-    return row[0] if row else 0
-
-
 def distinct_price_count(conn: sqlite3.Connection, ticker: str) -> int:
     row = conn.execute(
         "SELECT COUNT(DISTINCT price) FROM stocks WHERE ticker = ?", (ticker,)
@@ -681,9 +667,6 @@ def store_quotes(conn: sqlite3.Connection, tickers: list[str], raw: list[dict]) 
     inserted = insert_quotes(conn, clean_quotes(raw))
     log_pipeline_run(conn, ok, err, "OK" if err == 0 else f"PARTIAL ({err})")
     return inserted
-
-
-bulk_seed_history = seed_historical_prices
 
 
 if __name__ == "__main__":
